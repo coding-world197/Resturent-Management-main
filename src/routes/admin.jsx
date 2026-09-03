@@ -1,0 +1,1167 @@
+import { createFileRoute, Link, useNavigate, redirect } from "@tanstack/react-router";
+import { useState, useEffect, useMemo } from "react";
+import {
+  ShoppingBag,
+  ChefHat,
+  Settings,
+  X,
+  Phone,
+  MapPin,
+  Star,
+  Filter,
+  Search,
+  Plus,
+  Trash2,
+  Edit,
+  RefreshCw,
+  Printer,
+  Send,
+  Moon,
+  Sun,
+  Users,
+  Flame,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
+import { toast } from "sonner";
+import { supabase } from "@/lib/supabase";
+import Sidebar from "@/components/Sidebar";
+import { menu as defaultMenu, categories as defaultCategories } from "@/lib/menu-data";
+import { checkAdminAuth, logoutAdmin } from "@/lib/auth";
+import {
+  fetchMenuItems,
+  saveMenuItemToSupabase,
+  deleteMenuItemFromSupabase,
+  subscribeToMenuChanges,
+} from "@/lib/menu-service";
+import OverviewTab from "./OverviewTab";
+import LiveOrdersTab from "./LiveOrdersTab";
+import MenuManagementTab from "./MenuManagementTab";
+import UsersRolesTab from "./UsersRolesTab";
+import { useTheme } from "@/components/theme-provider";
+
+export const Route = createFileRoute("/admin")({
+  beforeLoad: async ({ location }) => {
+    const auth = await checkAdminAuth();
+    if (!auth.isAuthenticated || auth.user?.role !== "admin") {
+      throw redirect({
+        to: "/admin/login",
+        search: { redirect: location.href },
+      });
+    }
+    return { auth };
+  },
+  head: () => ({
+    meta: [
+      { title: "Admin Dashboard — Flamebox" },
+      {
+        name: "description",
+        content: "Manage live orders, menu items, restaurant settings and sales analytics.",
+      },
+    ],
+  }),
+  component: AdminDashboard,
+});
+
+const DEFAULT_ORDERS = [
+  {
+    id: "ORD-9024",
+    customer: {
+      name: "Aarav Sharma",
+      email: "aarav@example.com",
+      phone: "+1 (555) 234-5678",
+      address: "742 Evergreen Terrace, Springfield 97477",
+      notes: "Please deliver to the 3rd floor, ring bell twice.",
+    },
+    items: [
+      { id: "1", name: "Classic Cheeseburger", price: 8.99, qty: 2 },
+      { id: "4", name: "Golden Fries", price: 3.99, qty: 1 },
+      { id: "7", name: "Iced Cola", price: 2.5, qty: 2 },
+    ],
+    paymentMethod: "card",
+    subtotal: 26.97,
+    delivery: 2.99,
+    tax: 2.16,
+    total: 32.12,
+    status: "Pending",
+    createdAt: new Date(Date.now() - 1000 * 60 * 8).toISOString(),
+  },
+  {
+    id: "ORD-9023",
+    customer: {
+      name: "Sophia Chen",
+      email: "sophia.c@example.com",
+      phone: "+1 (555) 876-5432",
+      address: "120 Broadway Ave, Apt 4B, Metropolis 10001",
+      notes: "Extra napkins please!",
+    },
+    items: [
+      { id: "3", name: "Pepperoni Pizza", price: 14.0, qty: 1 },
+      { id: "6", name: "Buffalo Wings", price: 9.99, qty: 1 },
+      { id: "8", name: "Molten Lava Cake", price: 5.99, qty: 1 },
+    ],
+    paymentMethod: "card",
+    subtotal: 29.98,
+    delivery: 2.99,
+    tax: 2.4,
+    total: 35.37,
+    status: "Preparing",
+    createdAt: new Date(Date.now() - 1000 * 60 * 22).toISOString(),
+  },
+  {
+    id: "ORD-9022",
+    customer: {
+      name: "Marcus Vance",
+      email: "marcus.v@example.com",
+      phone: "+1 (555) 432-1098",
+      address: "88 Pine Street, Suite 12, Seattle 98101",
+      notes: "Call upon arrival.",
+    },
+    items: [
+      { id: "2", name: "Double Bacon Stack", price: 12.5, qty: 2 },
+      { id: "5", name: "Loaded Nachos", price: 7.5, qty: 1 },
+    ],
+    paymentMethod: "cash",
+    subtotal: 32.5,
+    delivery: 2.99,
+    tax: 2.6,
+    total: 38.09,
+    status: "Out for Delivery",
+    createdAt: new Date(Date.now() - 1000 * 60 * 45).toISOString(),
+  },
+  {
+    id: "ORD-9021",
+    customer: {
+      name: "Elena Rostova",
+      email: "elena.r@example.com",
+      phone: "+1 (555) 654-9870",
+      address: "450 Ocean Drive, Miami 33139",
+      notes: "Leave by door.",
+    },
+    items: [
+      { id: "1", name: "Classic Cheeseburger", price: 8.99, qty: 1 },
+      { id: "8", name: "Molten Lava Cake", price: 5.99, qty: 2 },
+    ],
+    paymentMethod: "card",
+    subtotal: 20.97,
+    delivery: 2.99,
+    tax: 1.68,
+    total: 25.64,
+    status: "Delivered",
+    createdAt: new Date(Date.now() - 1000 * 60 * 95).toISOString(),
+  },
+];
+
+function AdminDashboard() {
+  const navigate = useNavigate();
+  const { theme, setTheme } = useTheme();
+  const [activeTab, setActiveTab] = useState("overview");
+  const [orders, setOrders] = useState([]);
+  const [users, setUsers] = useState([]);
+  const [userRoleFilter, setUserRoleFilter] = useState("all");
+  const [userSearch, setUserSearch] = useState("");
+  const [updatingUserId, setUpdatingUserId] = useState(null);
+
+  const handleLogout = async () => {
+    try {
+      await logoutAdmin();
+      toast.success("Logged out successfully.");
+      if (typeof window !== "undefined" && window.__tanstack_router) {
+        window.__tanstack_router.invalidate();
+      }
+      navigate({ to: "/admin/login", replace: true });
+    } catch (err) {
+      toast.error("An error occurred during logout.");
+    }
+  };
+  const [menuItems, setMenuItems] = useState(defaultMenu);
+  const [orderFilter, setOrderFilter] = useState("all");
+  const [menuSearch, setMenuSearch] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState("All");
+
+  // Add/Edit Dish Modal State
+  const [dishModalOpen, setDishModalOpen] = useState(false);
+  const [editingDish, setEditingDish] = useState(null);
+  const [dishForm, setDishForm] = useState({
+    name: "",
+    description: "",
+    price: "",
+    category: "Burgers",
+    rating: 4.8,
+    image: "",
+    spicy: false,
+    veg: false,
+    bestseller: false,
+    inStock: true,
+  });
+
+  // Settings State
+  const [settings, setSettings] = useState({
+    storeOpen: true,
+    deliveryFee: "2.99",
+    taxRate: "8.0",
+    estimatedPrepTime: "25-35",
+    announcement: "🔥 Weekend Special: Free drink on orders above $30!",
+  });
+
+  // Load Initial Data from backend API and poll for updates
+  // Listen for logout events from Sidebar
+  useEffect(() => {
+    const handleSidebarLogout = () => {
+      handleLogout();
+    };
+    window.addEventListener("admin-logout", handleSidebarLogout);
+    return () => window.removeEventListener("admin-logout", handleSidebarLogout);
+  }, []);
+
+  useEffect(() => {
+    const fetchOrders = async () => {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        const headers = { "Content-Type": "application/json" };
+        if (session) {
+          headers["Authorization"] = `Bearer ${session.access_token}`;
+        }
+
+        const resp = await fetch("/api/admin/orders", {
+          method: "GET",
+          headers,
+          credentials: "omit", // No longer using cookies for auth, using Bearer token
+        });
+        if (!resp.ok) {
+          console.error("Failed to fetch orders, status:", resp.status);
+          setOrders(DEFAULT_ORDERS);
+          return;
+        }
+        const { orders } = await resp.json();
+        setOrders(orders);
+      } catch (e) {
+        console.error("Network error while fetching orders:", e);
+        setOrders(DEFAULT_ORDERS);
+      }
+    };
+    const fetchUsers = async () => {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (!session) return;
+
+        const resp = await fetch("/api/admin/users", {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+          },
+        });
+        if (!resp.ok) return;
+        const { users } = await resp.json();
+        setUsers(users || []);
+      } catch (e) {
+        console.error("Failed to fetch users", e);
+      }
+    };
+
+    fetchOrders();
+    fetchUsers();
+    const interval = setInterval(fetchOrders, 15000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+    let unsubscribe = () => {};
+
+    const updateMenu = (items) => {
+      if (isMounted && Array.isArray(items) && items.length > 0) {
+        setMenuItems(items);
+      }
+    };
+
+    const loadMenu = async () => {
+      updateMenu(await fetchMenuItems());
+      if (!isMounted) return;
+
+      unsubscribe = subscribeToMenuChanges(updateMenu);
+    };
+
+    loadMenu();
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, []);
+
+  const saveOrders = (updated) => {
+    setOrders(updated);
+    localStorage.setItem("flamebox_orders", JSON.stringify(updated));
+  };
+
+  const saveMenu = (updated) => {
+    setMenuItems(updated);
+    localStorage.setItem("flamebox_custom_menu", JSON.stringify(updated));
+  };
+
+  const [printingOrder, setPrintingOrder] = useState(null);
+  const [copiedSlipId, setCopiedSlipId] = useState(null);
+
+  // Receipt & Slip Helpers
+  const getWhatsAppSlipText = (order) => {
+    const itemsList = (order.items || [])
+      .map((i) => `• ${i.qty}x ${i.name} - $${(i.price * i.qty).toFixed(2)}`)
+      .join("\n");
+
+    const sub = order.subtotal || order.total - (order.delivery || 0) - (order.tax || 0);
+
+    return (
+      `🔥 *FLAMEBOX FAST-FOOD RECEIPT* 🔥\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `📋 *Order ID:* #${order.id}\n` +
+      `👤 *Customer:* ${order.customer?.name || "Valued Customer"}\n` +
+      `📞 *Phone:* ${order.customer?.phone || "N/A"}\n` +
+      `📍 *Address:* ${order.customer?.address || "Store Pickup"}\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `🍔 *ITEMS ORDERED:*\n${itemsList}\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `💵 *Subtotal:* $${Number(sub || 0).toFixed(2)}\n` +
+      `🛵 *Delivery Fee:* $${Number(order.delivery || 0).toFixed(2)}\n` +
+      `🏷️ *Tax:* $${Number(order.tax || 0).toFixed(2)}\n` +
+      `💰 *TOTAL AMOUNT:* $${Number(order.total || 0).toFixed(2)}\n` +
+      `💳 *Payment Method:* ${(order.paymentMethod || "CARD").toUpperCase()}\n` +
+      `⚡ *Order Status:* ${order.status}\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `Thank you for ordering with Flamebox! Fresh, Fast, Flame-Grilled! 🔥`
+    );
+  };
+
+  const handleSendWhatsAppSlip = (order) => {
+    const text = getWhatsAppSlipText(order);
+    const cleanPhone = (order.customer?.phone || "").replace(/[^0-9]/g, "");
+    const url = cleanPhone
+      ? `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encodeURIComponent(text)}`
+      : `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
+    window.open(url, "_blank");
+    toast.success("Opening WhatsApp with order receipt slip...");
+  };
+
+  const handleCopySlipText = (order) => {
+    const text = getWhatsAppSlipText(order);
+    navigator.clipboard.writeText(text);
+    setCopiedSlipId(order.id);
+    toast.success("Receipt slip copied to clipboard!");
+    setTimeout(() => setCopiedSlipId(null), 3000);
+  };
+
+  // Status Change handler
+  const handleUpdateOrderStatus = (orderId, nextStatus) => {
+    const updated = orders.map((o) => (o.id === orderId ? { ...o, status: nextStatus } : o));
+    saveOrders(updated);
+    if (selectedOrder && selectedOrder.id === orderId) {
+      setSelectedOrder({ ...selectedOrder, status: nextStatus });
+    }
+    if (printingOrder && printingOrder.id === orderId) {
+      setPrintingOrder({ ...printingOrder, status: nextStatus });
+    }
+    toast.success(`Order ${orderId} updated to "${nextStatus}"`);
+  };
+
+  const availableCategories = useMemo(() => {
+    const set = new Set(defaultCategories);
+    menuItems.forEach((item) => {
+      if (item.category && item.category.trim()) {
+        set.add(item.category.trim());
+      }
+    });
+    return Array.from(set);
+  }, [menuItems]);
+
+  const handleImageFileUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 5 * 1024 * 1024) {
+        toast.error("Image size should be less than 5MB");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setDishForm((prev) => ({ ...prev, image: reader.result }));
+        toast.success("Local image file attached!");
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  // Menu Management Handlers
+  const handleOpenAddDish = () => {
+    setEditingDish(null);
+    setDishForm({
+      name: "",
+      description: "",
+      price: "",
+      category: "Burgers",
+      rating: 4.8,
+      image: defaultMenu[0]?.image || "",
+      spicy: false,
+      veg: false,
+      bestseller: false,
+      inStock: true,
+    });
+    setDishModalOpen(true);
+  };
+
+  const handleOpenEditDish = (dish) => {
+    setEditingDish(dish);
+    setDishForm({
+      name: dish.name,
+      description: dish.description,
+      price: dish.price.toString(),
+      category: dish.category,
+      rating: dish.rating || 4.8,
+      image: dish.image || "",
+      spicy: !!dish.spicy,
+      veg: !!dish.veg,
+      bestseller: !!dish.bestseller,
+      inStock: dish.inStock !== false,
+    });
+    setDishModalOpen(true);
+  };
+
+  const handleSaveDish = async (e) => {
+    e.preventDefault();
+    if (!dishForm.name || !dishForm.price || !dishForm.description) {
+      toast.error("Please fill in name, price and description");
+      return;
+    }
+
+    const priceNum = parseFloat(dishForm.price);
+    if (isNaN(priceNum) || priceNum <= 0) {
+      toast.error("Please enter a valid positive price");
+      return;
+    }
+
+    if (editingDish) {
+      const updatedDish = {
+        ...editingDish,
+        ...dishForm,
+        price: priceNum,
+      };
+      const updated = menuItems.map((item) => (item.id === editingDish.id ? updatedDish : item));
+      saveMenu(updated);
+      await saveMenuItemToSupabase(updatedDish);
+      toast.success(`"${dishForm.name}" updated successfully!`);
+    } else {
+      const newDish = {
+        id: `dish-${Date.now()}`,
+        ...dishForm,
+        price: priceNum,
+        image: dishForm.image || defaultMenu[0]?.image,
+      };
+      const updated = [newDish, ...menuItems];
+      saveMenu(updated);
+      await saveMenuItemToSupabase(newDish);
+      toast.success(`"${dishForm.name}" added to menu!`);
+    }
+    setDishModalOpen(false);
+  };
+
+  const handleDeleteDish = async (dishId, dishName) => {
+    if (confirm(`Are you sure you want to remove "${dishName}" from the menu?`)) {
+      const updated = menuItems.filter((i) => i.id !== dishId);
+      saveMenu(updated);
+      await deleteMenuItemFromSupabase(dishId);
+      toast.success(`"${dishName}" deleted.`);
+    }
+  };
+
+  const handleToggleStock = async (dishId) => {
+    const updated = menuItems.map((item) =>
+      item.id === dishId ? { ...item, inStock: !item.inStock } : item,
+    );
+    saveMenu(updated);
+    const dish = updated.find((d) => d.id === dishId);
+    if (dish) {
+      await saveMenuItemToSupabase(dish);
+    }
+    toast.info(`${dish?.name} is now ${dish?.inStock ? "In Stock" : "Sold Out"}`);
+  };
+
+  const handleSaveSettings = (e) => {
+    e.preventDefault();
+    localStorage.setItem("flamebox_settings", JSON.stringify(settings));
+    toast.success("Restaurant settings updated successfully!");
+  };
+
+  // Calculations
+  const totalRevenue = orders
+    .filter((o) => o.status !== "Cancelled")
+    .reduce((acc, curr) => acc + (curr.total || 0), 0);
+
+  const pendingCount = orders.filter((o) => o.status === "Pending").length;
+  const preparingCount = orders.filter((o) => o.status === "Preparing").length;
+  const activeCount = pendingCount + preparingCount;
+  const deliveredCount = orders.filter((o) => o.status === "Delivered").length;
+
+  const filteredOrders = orders.filter((o) => {
+    if (orderFilter === "all") return true;
+    return o.status.toLowerCase() === orderFilter.toLowerCase();
+  });
+
+  const filteredMenu = menuItems.filter((dish) => {
+    const matchesCategory = selectedCategory === "All" || dish.category === selectedCategory;
+    const matchesSearch =
+      dish.name.toLowerCase().includes(menuSearch.toLowerCase()) ||
+      dish.description.toLowerCase().includes(menuSearch.toLowerCase());
+    return matchesCategory && matchesSearch;
+  });
+
+  const getStatusBadge = (status) => {
+    switch (status) {
+      case "Pending":
+        return (
+          <Badge className="bg-amber-500/15 text-amber-600 hover:bg-amber-500/20 border-amber-500/30">
+            Pending
+          </Badge>
+        );
+      case "Preparing":
+        return (
+          <Badge className="bg-blue-500/15 text-blue-600 hover:bg-blue-500/20 border-blue-500/30">
+            Preparing 🔥
+          </Badge>
+        );
+      case "Out for Delivery":
+        return (
+          <Badge className="bg-purple-500/15 text-purple-600 hover:bg-purple-500/20 border-purple-500/30">
+            On Way 🛵
+          </Badge>
+        );
+      case "Delivered":
+        return (
+          <Badge className="bg-emerald-500/15 text-emerald-600 hover:bg-emerald-500/20 border-emerald-500/30">
+            Delivered
+          </Badge>
+        );
+      case "Cancelled":
+        return (
+          <Badge className="bg-rose-500/15 text-rose-600 hover:bg-rose-500/20 border-rose-500/30">
+            Cancelled
+          </Badge>
+        );
+      default:
+        return <Badge variant="outline">{status}</Badge>;
+    }
+  };
+
+  const handleUpdateUserRole = async (userId, newRole, oldRole) => {
+    if (newRole === oldRole) {
+      toast.info("Role unchanged.");
+      return;
+    }
+    if (!confirm(`Are you sure you want to change this user's role to ${newRole}?`)) {
+      return;
+    }
+    setUpdatingUserId(userId);
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        toast.error("Not authenticated. Please log in again.");
+        return;
+      }
+      const response = await fetch("/api/admin/users/update", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ userId, newRole }),
+      });
+      if (!response.ok) {
+        const err = await response.text();
+        throw new Error(err || "Failed to update user role");
+      }
+      setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, role: newRole } : u)));
+      toast.success("User role updated successfully");
+    } catch (error) {
+      console.error(error);
+      toast.error(error.message || "Error updating user role");
+    } finally {
+      setUpdatingUserId(null);
+    }
+  };
+
+  return (
+    <div className="flex h-screen overflow-hidden bg-background text-foreground">
+      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
+      <main className="flex-1 overflow-auto p-4">
+        {/* Top Header */}
+        <header className="sticky top-0 z-30 bg-card border-b border-border shadow-sm">
+          <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6">
+            <div className="flex items-center gap-3">
+              <Link to="/" className="flex items-center gap-2 group">
+                <span className="grid h-9 w-9 place-items-center rounded-xl bg-brand text-brand-foreground shadow-md transition-transform group-hover:scale-105">
+                  <Flame className="h-5 w-5" />
+                </span>
+                <span className="font-display text-2xl tracking-wide">
+                  FLAME<span className="text-brand">BOX</span>
+                </span>
+              </Link>
+              <span className="rounded-md bg-brand/10 px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-brand">
+                Admin Portal
+              </span>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <div className="hidden sm:flex items-center gap-2 rounded-full border border-border bg-secondary/50 px-3 py-1 text-xs">
+                <span
+                  className={`h-2 w-2 rounded-full ${settings.storeOpen ? "bg-emerald-500 animate-pulse" : "bg-rose-500"}`}
+                />
+                <span className="font-medium">
+                  {settings.storeOpen ? "Kitchen Accepting Orders" : "Kitchen Offline"}
+                </span>
+              </div>
+              <Button asChild variant="outline" size="sm" className="rounded-full">
+                <Link to="/">View Storefront</Link>
+              </Button>
+              <button
+                onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+                className="grid h-9 w-9 place-items-center rounded-full bg-secondary border border-border transition hover:bg-muted"
+                aria-label="Toggle theme"
+              >
+                {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              </button>
+            </div>
+          </div>
+        </header>
+
+        {/* TAB 1: OVERVIEW */}
+        {activeTab === "overview" && (
+          <OverviewTab
+            totalRevenue={totalRevenue}
+            orders={orders}
+            activeCount={activeCount}
+            settings={settings}
+          />
+        )}
+
+        {/* TAB 2: LIVE ORDERS */}
+        {activeTab === "orders" && (
+          <LiveOrdersTab
+            orders={orders}
+            filteredOrders={filteredOrders}
+            orderFilter={orderFilter}
+            setOrderFilter={setOrderFilter}
+            activeCount={activeCount}
+            handleUpdateOrderStatus={handleUpdateOrderStatus}
+            handleToggleStock={handleToggleStock}
+            handleSendWhatsAppSlip={handleSendWhatsAppSlip}
+            setPrintingOrder={setPrintingOrder}
+            handleOpenAddDish={handleOpenAddDish}
+            saveOrders={saveOrders}
+            toast={toast}
+            getStatusBadge={getStatusBadge}
+          />
+        )}
+
+        {/* TAB 3: MENU MANAGEMENT */}
+        {activeTab === "menu" && (
+          <MenuManagementTab
+            filteredMenu={filteredMenu}
+            selectedCategory={selectedCategory}
+            setSelectedCategory={setSelectedCategory}
+            availableCategories={availableCategories}
+            menuSearch={menuSearch}
+            setMenuSearch={setMenuSearch}
+            handleOpenAddDish={handleOpenAddDish}
+            editingDish={editingDish}
+            dishForm={dishForm}
+            setDishForm={setDishForm}
+            handleImageFileUpload={handleImageFileUpload}
+            handleToggleStock={handleToggleStock}
+            handleDeleteDish={handleDeleteDish}
+            handleSaveDish={handleSaveDish}
+            toast={toast}
+            handleOpenEditDish={handleOpenEditDish}
+          />
+        )}
+
+        {/* TAB 4: SETTINGS */}
+        {activeTab === "settings" && (
+          <div className="mt-6 max-w-2xl mx-auto rounded-3xl border border-border bg-card p-6 shadow-sm animate-in fade-in-50 duration-300">
+            <h2 className="font-display text-2xl">Store & Kitchen Settings</h2>
+            <p className="text-xs text-muted-foreground mb-6">
+              Configure restaurant operational parameters and fees
+            </p>
+
+            <form onSubmit={handleSaveSettings} className="space-y-5">
+              <div className="flex items-center justify-between rounded-2xl border border-border p-4 bg-secondary/30">
+                <div>
+                  <h4 className="font-semibold text-sm">Store Accepting Orders</h4>
+                  <p className="text-xs text-muted-foreground">
+                    Toggle offline to stop accepting new orders during rush hours.
+                  </p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={settings.storeOpen}
+                  onChange={(e) => setSettings({ ...settings, storeOpen: e.target.checked })}
+                  className="h-5 w-5 rounded border-border text-brand focus:ring-brand"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label htmlFor="deliveryFee" className="text-xs">
+                    Standard Delivery Fee ($)
+                  </Label>
+                  <Input
+                    id="deliveryFee"
+                    value={settings.deliveryFee}
+                    onChange={(e) => setSettings({ ...settings, deliveryFee: e.target.value })}
+                    className="rounded-xl"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="taxRate" className="text-xs">
+                    Tax Rate (%)
+                  </Label>
+                  <Input
+                    id="taxRate"
+                    value={settings.taxRate}
+                    onChange={(e) => setSettings({ ...settings, taxRate: e.target.value })}
+                    className="rounded-xl"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="prepTime" className="text-xs">
+                  Estimated Preparation Time (Minutes)
+                </Label>
+                <Input
+                  id="prepTime"
+                  value={settings.estimatedPrepTime}
+                  onChange={(e) => setSettings({ ...settings, estimatedPrepTime: e.target.value })}
+                  placeholder="e.g. 25-35"
+                  className="rounded-xl"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="announcement" className="text-xs">
+                  Header Announcement Message
+                </Label>
+                <Textarea
+                  id="announcement"
+                  value={settings.announcement}
+                  onChange={(e) => setSettings({ ...settings, announcement: e.target.value })}
+                  rows={2}
+                  className="rounded-xl text-xs"
+                />
+              </div>
+
+              <div className="pt-4 border-t border-border flex justify-end">
+                <Button
+                  type="submit"
+                  className="rounded-full bg-brand text-brand-foreground hover:bg-brand/90 px-6"
+                >
+                  Save Settings
+                </Button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {/* TAB 6: USERS & ROLES */}
+        {activeTab === "users" && (
+          <UsersRolesTab
+            users={users}
+            userRoleFilter={userRoleFilter}
+            setUserRoleFilter={setUserRoleFilter}
+            userSearch={userSearch}
+            setUserSearch={setUserSearch}
+            updatingUserId={updatingUserId}
+            setUpdatingUserId={setUpdatingUserId}
+            handleUpdateUserRole={handleUpdateUserRole}
+            toast={toast}
+          />
+        )}
+
+        {/* ADD / EDIT DISH MODAL */}
+        {dishModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in-50 duration-200">
+            <div className="w-full max-w-lg rounded-3xl border border-border bg-card p-6 shadow-2xl overflow-y-auto max-h-[90vh]">
+              <div className="flex items-center justify-between border-b border-border pb-3">
+                <h3 className="font-display text-2xl">
+                  {editingDish ? "Edit Dish" : "Add New Dish"}
+                </h3>
+                <button
+                  onClick={() => setDishModalOpen(false)}
+                  className="grid h-8 w-8 place-items-center rounded-full hover:bg-secondary text-muted-foreground"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveDish} className="mt-4 space-y-4">
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold">Dish Name</Label>
+                  <Input
+                    value={dishForm.name}
+                    onChange={(e) => setDishForm({ ...dishForm, name: e.target.value })}
+                    placeholder="e.g. Smoky BBQ Bacon Burger"
+                    className="rounded-xl"
+                    required
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold">Category</Label>
+                    <Input
+                      list="category-suggestions"
+                      value={dishForm.category}
+                      onChange={(e) => setDishForm({ ...dishForm, category: e.target.value })}
+                      placeholder="e.g. Burgers, Wraps, Deals..."
+                      className="rounded-xl text-xs"
+                      required
+                    />
+                    <datalist id="category-suggestions">
+                      {availableCategories.map((c) => (
+                        <option key={c} value={c} />
+                      ))}
+                    </datalist>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold">Price ($)</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={dishForm.price}
+                      onChange={(e) => setDishForm({ ...dishForm, price: e.target.value })}
+                      placeholder="9.99"
+                      className="rounded-xl"
+                      required
+                    />
+                  </div>
+                </div>
+
+                {/* Image Input & Upload */}
+                <div className="space-y-2">
+                  <Label className="text-xs font-semibold">Dish Image</Label>
+                  <div className="flex flex-col gap-2">
+                    <div className="relative">
+                      <input
+                        type="file"
+                        accept="image/*"
+                        id="dish-image-file"
+                        className="hidden"
+                        onChange={handleImageFileUpload}
+                      />
+                      <label
+                        htmlFor="dish-image-file"
+                        className="flex h-10 w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-secondary/50 text-xs font-medium text-muted-foreground hover:bg-secondary hover:text-foreground transition"
+                      >
+                        <Upload className="h-4 w-4 text-brand" />
+                        <span>Choose Image File from Computer</span>
+                      </label>
+                    </div>
+
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <span className="shrink-0 text-[11px]">or Image URL:</span>
+                      <Input
+                        value={dishForm.image}
+                        onChange={(e) => setDishForm({ ...dishForm, image: e.target.value })}
+                        placeholder="https://example.com/photo.jpg"
+                        className="rounded-xl h-9 text-xs"
+                      />
+                    </div>
+
+                    {/* Live Image Preview */}
+                    {dishForm.image && (
+                      <div className="relative flex items-center gap-3 rounded-2xl border border-border bg-secondary/40 p-2">
+                        <img
+                          src={dishForm.image}
+                          alt="Preview"
+                          className="h-14 w-14 rounded-xl object-cover border border-border bg-card"
+                        />
+                        <div className="flex-1 overflow-hidden">
+                          <p className="text-xs font-semibold text-foreground truncate">
+                            Selected Picture
+                          </p>
+                          <p className="text-[10px] text-muted-foreground truncate">
+                            {dishForm.image.startsWith("data:")
+                              ? "Uploaded Local Image File"
+                              : dishForm.image}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setDishForm({ ...dishForm, image: "" })}
+                          className="grid h-7 w-7 place-items-center rounded-full hover:bg-destructive/20 text-destructive text-xs"
+                          title="Remove image"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold">Description</Label>
+                  <Textarea
+                    value={dishForm.description}
+                    onChange={(e) => setDishForm({ ...dishForm, description: e.target.value })}
+                    placeholder="Describe ingredients, taste and toppings..."
+                    rows={2}
+                    className="rounded-xl text-xs"
+                    required
+                  />
+                </div>
+
+                {/* Tags toggles */}
+                <div className="rounded-2xl bg-secondary/30 p-3 border border-border/80">
+                  <Label className="text-xs font-semibold block mb-2">Item Tags & Badges</Label>
+                  <div className="grid grid-cols-3 gap-2 text-xs">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={dishForm.bestseller}
+                        onChange={(e) => setDishForm({ ...dishForm, bestseller: e.target.checked })}
+                        className="rounded text-brand"
+                      />
+                      <span>Bestseller</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={dishForm.spicy}
+                        onChange={(e) => setDishForm({ ...dishForm, spicy: e.target.checked })}
+                        className="rounded text-brand"
+                      />
+                      <span>🌶️ Spicy</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={dishForm.veg}
+                        onChange={(e) => setDishForm({ ...dishForm, veg: e.target.checked })}
+                        className="rounded text-brand"
+                      />
+                      <span>🌱 Veg</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2 border-t border-border">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => setDishModalOpen(false)}
+                    className="rounded-full text-xs"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    className="rounded-full bg-brand text-brand-foreground hover:bg-brand/90 text-xs px-6"
+                  >
+                    {editingDish ? "Save Changes" : "Create Dish"}
+                  </Button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* PRINTABLE ORDER SLIP / RECEIPT MODAL */}
+        {printingOrder && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in-50 duration-200">
+            <div className="w-full max-w-md rounded-3xl border border-border bg-card p-6 shadow-2xl overflow-y-auto max-h-[95vh] text-foreground">
+              {/* Modal Top Header */}
+              <div className="flex items-center justify-between border-b border-border pb-3 mb-4">
+                <div className="flex items-center gap-2">
+                  <FileText className="h-5 w-5 text-brand" />
+                  <h3 className="font-display text-xl font-bold">Order Receipt Slip</h3>
+                </div>
+                <button
+                  onClick={() => setPrintingOrder(null)}
+                  className="grid h-8 w-8 place-items-center rounded-full hover:bg-secondary text-muted-foreground"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              {/* Printable Thermal Slip Canvas */}
+              <div
+                id="printable-order-slip"
+                className="rounded-2xl border-2 border-dashed border-border bg-background p-5 font-mono text-xs text-foreground space-y-3 shadow-inner"
+              >
+                {/* Header */}
+                <div className="text-center pb-3 border-b border-dashed border-border space-y-1">
+                  <div className="font-display text-2xl font-bold tracking-wider text-brand">
+                    FLAMEBOX FAST-FOOD
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">Fresh · Fast · Flame-Grilled</p>
+                  <p className="text-[10px] text-muted-foreground">
+                    Tel: +1 (555) 019-2834 · www.flamebox.com
+                  </p>
+                </div>
+
+                {/* Order Meta */}
+                <div className="space-y-1 text-[11px] pb-2 border-b border-dashed border-border">
+                  <div className="flex justify-between">
+                    <span className="font-bold">Order ID:</span>
+                    <span className="font-bold text-brand">#{printingOrder.id}</span>
+                  </div>
+                  <div className="flex justify-between text-muted-foreground">
+                    <span>Date & Time:</span>
+                    <span>{new Date(printingOrder.createdAt).toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Payment:</span>
+                    <span className="font-semibold uppercase">
+                      {printingOrder.paymentMethod || "CARD"}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Status:</span>
+                    <span className="font-semibold text-emerald-500">{printingOrder.status}</span>
+                  </div>
+                </div>
+
+                {/* Customer Info */}
+                <div className="space-y-1 text-[11px] pb-2 border-b border-dashed border-border bg-secondary/30 p-2.5 rounded-xl">
+                  <p className="font-bold text-foreground">Customer Details:</p>
+                  <p className="text-foreground font-medium">{printingOrder.customer?.name}</p>
+                  <p className="text-muted-foreground">📞 {printingOrder.customer?.phone}</p>
+                  <p className="text-muted-foreground">📍 {printingOrder.customer?.address}</p>
+                  {printingOrder.customer?.notes && (
+                    <p className="text-amber-500/90 italic pt-1 text-[10px]">
+                      Note: {printingOrder.customer?.notes}
+                    </p>
+                  )}
+                </div>
+
+                {/* Items List */}
+                <div className="space-y-2 pb-3 border-b border-dashed border-border">
+                  <div className="flex justify-between font-bold text-[11px] text-muted-foreground uppercase border-b border-border pb-1">
+                    <span>Item / Qty</span>
+                    <span>Amount</span>
+                  </div>
+                  {printingOrder.items?.map((item, idx) => (
+                    <div key={idx} className="flex justify-between items-start text-xs">
+                      <div>
+                        <span className="font-bold text-brand mr-1">{item.qty}x</span>
+                        <span className="font-medium text-foreground">{item.name}</span>
+                        <span className="block text-[10px] text-muted-foreground">
+                          @ ${Number(item.price).toFixed(2)} each
+                        </span>
+                      </div>
+                      <span className="font-bold text-foreground">
+                        ${(Number(item.price) * Number(item.qty)).toFixed(2)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Financial Totals */}
+                <div className="space-y-1.5 text-xs pb-3 border-b border-dashed border-border">
+                  <div className="flex justify-between text-muted-foreground">
+                    <span>Subtotal:</span>
+                    <span>
+                      $
+                      {Number(
+                        printingOrder.subtotal ||
+                          printingOrder.total -
+                            (printingOrder.delivery || 0) -
+                            (printingOrder.tax || 0),
+                      ).toFixed(2)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-muted-foreground">
+                    <span>Delivery Fee:</span>
+                    <span>${Number(printingOrder.delivery || 0).toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between text-muted-foreground">
+                    <span>Tax:</span>
+                    <span>${Number(printingOrder.tax || 0).toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between font-display text-lg font-bold text-brand pt-1 border-t border-border">
+                    <span>TOTAL DUE:</span>
+                    <span>${Number(printingOrder.total).toFixed(2)}</span>
+                  </div>
+                </div>
+
+                {/* Footer Note */}
+                <div className="text-center pt-2 text-[10px] text-muted-foreground space-y-1">
+                  <p className="font-semibold text-foreground">Thank you for dining with us!</p>
+                  <p>Have questions? Call or reply on WhatsApp.</p>
+                  <div className="tracking-widest font-mono text-[9px] pt-1 opacity-70">
+                    ||| | |||| || ||||| |||| ||| ||||
+                  </div>
+                </div>
+              </div>
+
+              {/* Modal Bottom Actions */}
+              <div className="mt-5 flex flex-col gap-2 pt-2 border-t border-border">
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    onClick={() => window.print()}
+                    className="h-10 rounded-xl bg-brand text-brand-foreground hover:bg-brand/90 font-semibold text-xs gap-1.5 shadow-md shadow-brand/20"
+                  >
+                    <Printer className="h-4 w-4" />
+                    <span>Print Receipt</span>
+                  </Button>
+                  <Button
+                    onClick={() => handleSendWhatsAppSlip(printingOrder)}
+                    className="h-10 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs gap-1.5 shadow-md shadow-emerald-600/20"
+                  >
+                    <Send className="h-4 w-4" />
+                    <span>Send to WhatsApp</span>
+                  </Button>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => handleCopySlipText(printingOrder)}
+                    className="h-9 rounded-xl text-xs gap-1.5"
+                  >
+                    {copiedSlipId === printingOrder.id ? (
+                      <>
+                        <Check className="h-3.5 w-3.5 text-emerald-500" />
+                        <span className="text-emerald-500">Copied!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="h-3.5 w-3.5" />
+                        <span>Copy Slip Text</span>
+                      </>
+                    )}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    onClick={() => setPrintingOrder(null)}
+                    className="h-9 rounded-xl text-xs"
+                  >
+                    Close
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+export default AdminDashboard;

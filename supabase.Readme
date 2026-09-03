@@ -1,0 +1,135 @@
+# Flamebox Fast-Food — Supabase Setup & SQL Schema
+
+Follow these instructions to link your Supabase database with Flamebox and enable real-time synchronization for products, menu items, orders, and store settings.
+
+---
+
+## 1. Environment Credentials
+
+Make sure your `.env` file in the project root contains your Supabase credentials:
+
+```env
+# Supabase Configuration (Get these from your NEW Supabase project settings -> API)
+VITE_SUPABASE_URL=<YOUR_NEW_SUPABASE_URL>
+VITE_SUPABASE_ANON_KEY=<YOUR_NEW_SUPABASE_ANON_KEY>
+
+NEXT_PUBLIC_SUPABASE_URL=<YOUR_NEW_SUPABASE_URL>
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<YOUR_NEW_SUPABASE_ANON_KEY>
+```
+
+---
+
+## 2. SQL Code to Run in Supabase SQL Editor
+
+Go to your **Supabase Dashboard** -> **SQL Editor** -> **New Query**, paste the SQL code below, and click **Run**.
+
+```sql
+-- ==========================================
+-- 1. DROP EXISTING TABLES IF EXISTS (CLEAN SLATE)
+-- ==========================================
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+DROP FUNCTION IF EXISTS public.handle_new_user();
+DROP TABLE IF EXISTS public.profiles CASCADE;
+DROP TABLE IF EXISTS public.orders CASCADE;
+DROP TABLE IF EXISTS public.menu_items CASCADE;
+DROP TABLE IF EXISTS public.categories CASCADE;
+DROP TABLE IF EXISTS public.store_settings CASCADE;
+
+-- ==========================================
+-- 2. CREATE PROFILES TABLE & AUTH TRIGGER
+-- ==========================================
+CREATE TABLE public.profiles (
+    id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    full_name TEXT,
+    email TEXT UNIQUE NOT NULL,
+    phone TEXT,
+    address TEXT,
+    is_admin BOOLEAN DEFAULT false,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Public profiles are viewable by everyone." ON public.profiles FOR SELECT USING (true);
+CREATE POLICY "Users can insert their own profile." ON public.profiles FOR INSERT WITH CHECK (auth.uid() = id);
+CREATE POLICY "Users can update own profile." ON public.profiles FOR UPDATE USING (auth.uid() = id);
+
+-- Trigger to automatically create a profile for each new user
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER AS $$
+BEGIN
+  INSERT INTO public.profiles (id, full_name, email)
+  VALUES (new.id, new.raw_user_meta_data->>'full_name', new.email);
+  RETURN new;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE PROCEDURE public.handle_new_user();
+
+-- ==========================================
+-- 3. CREATE MENU ITEMS TABLE
+-- ==========================================
+CREATE TABLE public.menu_items (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    price NUMERIC(10, 2) NOT NULL DEFAULT 0.00,
+    image TEXT,
+    category TEXT NOT NULL DEFAULT 'Burgers',
+    rating NUMERIC(3, 1) DEFAULT 4.8,
+    bestseller BOOLEAN DEFAULT false,
+    spicy BOOLEAN DEFAULT false,
+    veg BOOLEAN DEFAULT false,
+    in_stock BOOLEAN DEFAULT true,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Enable RLS & Allow Public Access
+ALTER TABLE public.menu_items ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Public Read Access Menu" ON public.menu_items FOR SELECT USING (true);
+CREATE POLICY "Public Insert Access Menu" ON public.menu_items FOR INSERT WITH CHECK (true);
+CREATE POLICY "Public Update Access Menu" ON public.menu_items FOR UPDATE USING (true);
+CREATE POLICY "Public Delete Access Menu" ON public.menu_items FOR DELETE USING (true);
+
+-- ==========================================
+-- 3. CREATE ORDERS TABLE
+-- ==========================================
+CREATE TABLE public.orders (
+    id TEXT PRIMARY KEY,
+    customer JSONB NOT NULL,
+    items JSONB NOT NULL,
+    payment_method TEXT DEFAULT 'card',
+    subtotal NUMERIC(10, 2) DEFAULT 0.00,
+    delivery NUMERIC(10, 2) DEFAULT 2.99,
+    tax NUMERIC(10, 2) DEFAULT 0.00,
+    total NUMERIC(10, 2) DEFAULT 0.00,
+    status TEXT DEFAULT 'Pending',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Public Access Orders" ON public.orders FOR ALL USING (true);
+
+-- ==========================================
+-- 4. INSERT DEFAULT MENU ITEMS
+-- ==========================================
+INSERT INTO public.menu_items (id, name, description, price, image, category, rating, bestseller, spicy, veg, in_stock) VALUES
+('1', 'Classic Cheeseburger', 'Juicy beef patty, cheddar, fresh lettuce & tomato.', 8.99, '/assets/food-burger.jpg', 'Burgers', 4.8, true, false, false, true),
+('2', 'Double Bacon Stack', 'Two patties, crispy bacon, molten cheddar.', 12.50, '/assets/food-burger2.jpg', 'Burgers', 4.9, true, false, false, true),
+('3', 'Pepperoni Pizza', 'Wood-fired crust, mozzarella, spicy pepperoni.', 14.00, '/assets/food-pizza.jpg', 'Pizza', 4.7, true, true, false, true),
+('4', 'Golden Fries', 'Hand-cut, sea-salted, crispy perfection.', 3.99, '/assets/food-fries.jpg', 'Sides', 4.6, false, false, true, true),
+('5', 'Loaded Nachos', 'Melted cheese, jalapeños, salsa & sour cream.', 7.50, '/assets/food-nachos.jpg', 'Sides', 4.5, false, true, true, true),
+('6', 'Buffalo Wings', 'Crispy wings tossed in fiery hot sauce.', 9.99, '/assets/food-wings.jpg', 'Sides', 4.8, true, true, false, true),
+('7', 'Iced Cola', 'Ice-cold refreshing classic cola.', 2.50, '/assets/food-drink.jpg', 'Beverages', 4.4, false, false, true, true),
+('8', 'Molten Lava Cake', 'Warm chocolate cake with vanilla ice cream.', 5.99, '/assets/food-dessert.jpg', 'Desserts', 4.9, true, false, true, true)
+ON CONFLICT (id) DO NOTHING;
+```
+
+---
+
+## 3. Realtime Enablement (Optional)
+
+If you want real-time updates across multiple open browser tabs:
+1. In Supabase Dashboard, navigate to **Database** -> **Publications**.
+2. Click `supabase_realtime` and enable replication for `menu_items` and `orders`.
