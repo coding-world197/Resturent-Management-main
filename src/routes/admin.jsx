@@ -54,6 +54,7 @@ import MenuManagementTab from "./MenuManagementTab";
 import UsersRolesTab from "./UsersRolesTab";
 import { useTheme } from "@/components/theme-provider";
 import { PORTAL_ROLES, canAccessTab, getDefaultTab } from "@/lib/permissions";
+import { fetchProfiles, subscribeToProfilesChanges } from "@/lib/user-service";
 
 export const Route = createFileRoute("/admin")({
   beforeLoad: async ({ location }) => {
@@ -421,27 +422,15 @@ function AdminDashboard() {
     }
   };
 
-  // Fetch users — only executed if user is an admin
+  // Fetch users directly from Supabase profiles table
   const fetchUsers = async () => {
-    if (userRole !== "admin") return;
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (!session) return;
-
-      const resp = await fetch("/api/admin/users", {
-        method: "GET",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-        },
-      });
-      if (!resp.ok) return;
-      const { users } = await resp.json();
-      setUsers(users || []);
+      const profiles = await fetchProfiles();
+      if (Array.isArray(profiles)) {
+        setUsers(profiles);
+      }
     } catch (e) {
-      console.error("Failed to fetch users", e);
+      console.error("Failed to fetch users:", e);
     }
   };
 
@@ -489,8 +478,25 @@ function AdminDashboard() {
     }
 
     const interval = setInterval(fetchOrders, 10000);
+
+    // Subscribe to real-time profiles updates (e.g. role changes in Supabase dashboard)
+    const unsubscribeProfiles = subscribeToProfilesChanges((payload) => {
+      if (payload.eventType === "UPDATE" && payload.new) {
+        setUsers((prev) =>
+          prev.map((u) => (u.id === payload.new.id ? { ...u, ...payload.new } : u))
+        );
+      } else if (payload.eventType === "INSERT" && payload.new) {
+        setUsers((prev) => [payload.new, ...prev.filter((u) => u.id !== payload.new.id)]);
+      } else if (payload.eventType === "DELETE" && payload.old) {
+        setUsers((prev) => prev.filter((u) => u.id !== payload.old.id));
+      }
+    });
+
     return () => {
       clearInterval(interval);
+      if (typeof unsubscribeProfiles === "function") {
+        unsubscribeProfiles();
+      }
       if (orderChannel && supabase) {
         try {
           supabase.removeChannel(orderChannel);
@@ -498,6 +504,13 @@ function AdminDashboard() {
       }
     };
   }, []);
+
+  // Ensure fresh user profiles are loaded whenever navigating to the users tab
+  useEffect(() => {
+    if (activeTab === "users") {
+      fetchUsers();
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     let isMounted = true;

@@ -21,21 +21,22 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // Check role in profiles table to ensure they are an admin
+    // Check role in profiles table to ensure they are an admin or manager
     const { data: profile, error: profileError } = await supabase
       .from('profiles')
       .select('role')
       .eq('id', user.id)
       .single();
 
-    if (profileError || !profile || profile.role !== 'admin') {
-      return res.status(403).json({ error: 'Forbidden: Admin role required' });
+    const userRole = (profile?.role || '').toLowerCase().trim();
+    if (profileError || (userRole !== 'admin' && userRole !== 'manager')) {
+      return res.status(403).json({ error: 'Forbidden: Admin or Manager role required' });
     }
 
-    // Fetch all profiles using service role key
+    // Fetch all profiles from Supabase
     const { data: users, error: usersError } = await supabase
       .from('profiles')
-      .select('id, full_name, email, role, created_at')
+      .select('id, full_name, email, role, is_active, created_at, phone, address')
       .order('created_at', { ascending: false });
 
     if (usersError) {
@@ -43,7 +44,7 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: 'Failed to fetch users' });
     }
 
-    return res.status(200).json({ users });
+    return res.status(200).json({ users: users || [] });
   } catch (error) {
     console.error('Users API error:', error);
     return res.status(500).json({ error: 'Internal Server Error' });

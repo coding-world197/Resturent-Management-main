@@ -19,13 +19,14 @@ export async function checkAdminAuth() {
       return { isAuthenticated: false, user: null };
     }
 
-    const role = profile.role; // Should be 'customer', 'admin', or 'chef'
+    const rawRole = profile.role || 'customer';
+    const role = rawRole.toLowerCase().trim();
     
-    // We only consider admins and chefs authenticated for the admin portal
-    if (role === 'admin' || role === 'chef') {
+    // We consider admins, managers, and chefs authenticated for the admin portal
+    if (role === 'admin' || role === 'chef' || role === 'manager') {
       return {
         isAuthenticated: true,
-        user: { ...session.user, role }
+        user: { ...session.user, role, originalRole: rawRole }
       };
     }
 

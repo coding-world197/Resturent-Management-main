@@ -1,4 +1,4 @@
-import { supabase } from '../../src/lib/supabaseServer.js';
+import { supabase } from './supabaseServer.js';
 
 export async function ensureAdmin(req) {
   const authHeader = req.headers.authorization;
@@ -15,8 +15,9 @@ export async function ensureAdmin(req) {
     .select('role')
     .eq('id', user.id)
     .single();
-  if (profileError || !profile || profile.role !== 'admin') {
-    throw { status: 403, message: 'Admin role required' };
+  const role = (profile?.role || '').toLowerCase().trim();
+  if (profileError || (role !== 'admin' && role !== 'manager')) {
+    throw { status: 403, message: 'Admin or Manager role required' };
   }
   return user.id;
 }

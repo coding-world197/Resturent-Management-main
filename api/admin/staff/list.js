@@ -1,5 +1,5 @@
-import { supabase } from '../../src/lib/supabaseServer.js';
-import { ensureAdmin } from '../../src/lib/adminAuth.js';
+import { supabase } from '../../../src/lib/supabaseServer.js';
+import { ensureAdmin } from '../../../src/lib/adminAuth.js';
 
 export default async function handler(req, res) {
   if (req.method !== 'GET') {
@@ -9,8 +9,7 @@ export default async function handler(req, res) {
     await ensureAdmin(req);
     const { data: staff, error } = await supabase
       .from('profiles')
-      .select('id, full_name, email, role, is_active, created_at')
-      .in('role', ['admin', 'chef'])
+      .select('id, full_name, email, role, is_active, created_at, phone, address')
       .order('created_at', { ascending: false });
     if (error) throw error;
     return res.status(200).json({ staff });

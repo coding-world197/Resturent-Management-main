@@ -17,7 +17,7 @@ function parseJson(req) {
   });
 }
 
-const VALID_ROLES = ['customer', 'chef', 'admin'];
+const VALID_ROLES = ['customer', 'chef', 'manager', 'cashier', 'admin'];
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -41,15 +41,16 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: 'Unauthorized. Please log in again.' });
     }
 
-    // Verify requester is admin
+    // Verify requester is admin or manager
     const { data: requesterProfile, error: profileError } = await supabase
       .from('profiles')
       .select('role')
       .eq('id', requestingUser.id)
       .single();
 
-    if (profileError || !requesterProfile || requesterProfile.role !== 'admin') {
-      return res.status(403).json({ error: 'Forbidden: Admin privileges required to create employee accounts.' });
+    const requesterRole = (requesterProfile?.role || '').toLowerCase().trim();
+    if (profileError || (requesterRole !== 'admin' && requesterRole !== 'manager')) {
+      return res.status(403).json({ error: 'Forbidden: Admin or Manager privileges required to create accounts.' });
     }
 
     // ── 2. Parse and validate the request body ────────────────────────────
