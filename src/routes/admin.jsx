@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useNavigate, redirect } from "@tanstack/react-router";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import {
   ShoppingBag,
   ChefHat,
@@ -20,6 +20,17 @@ import {
   Sun,
   Users,
   Flame,
+  Bell,
+  BellRing,
+  Volume2,
+  VolumeX,
+  CheckCheck,
+  Check,
+  Clock,
+  ArrowRight,
+  FileText,
+  Copy,
+  Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -42,11 +53,12 @@ import LiveOrdersTab from "./LiveOrdersTab";
 import MenuManagementTab from "./MenuManagementTab";
 import UsersRolesTab from "./UsersRolesTab";
 import { useTheme } from "@/components/theme-provider";
+import { PORTAL_ROLES, canAccessTab, getDefaultTab } from "@/lib/permissions";
 
 export const Route = createFileRoute("/admin")({
   beforeLoad: async ({ location }) => {
     const auth = await checkAdminAuth();
-    if (!auth.isAuthenticated || auth.user?.role !== "admin") {
+    if (!auth.isAuthenticated || !PORTAL_ROLES.includes(auth.user?.role)) {
       throw redirect({
         to: "/admin/login",
         search: { redirect: location.href },
@@ -66,16 +78,225 @@ export const Route = createFileRoute("/admin")({
   component: AdminDashboard,
 });
 
+// Dual-tone restaurant notification chime using Web Audio API
+function playOrderChime() {
+  try {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return;
+    const ctx = new AudioContextClass();
+    if (ctx.state === "suspended") {
+      ctx.resume().catch(() => {});
+    }
+
+    const now = ctx.currentTime;
+
+    // Tone 1: 587.33 Hz (D5)
+    const osc1 = ctx.createOscillator();
+    const gain1 = ctx.createGain();
+    osc1.type = "sine";
+    osc1.frequency.setValueAtTime(587.33, now);
+    gain1.gain.setValueAtTime(0.18, now);
+    gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+    osc1.connect(gain1);
+    gain1.connect(ctx.destination);
+    osc1.start(now);
+    osc1.stop(now + 0.35);
+
+    // Tone 2: 880.00 Hz (A5 chime)
+    const osc2 = ctx.createOscillator();
+    const gain2 = ctx.createGain();
+    osc2.type = "sine";
+    osc2.frequency.setValueAtTime(880, now + 0.12);
+    gain2.gain.setValueAtTime(0.22, now + 0.12);
+    gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.55);
+    osc2.connect(gain2);
+    gain2.connect(ctx.destination);
+    osc2.start(now + 0.12);
+    osc2.stop(now + 0.55);
+  } catch (err) {
+    console.warn("Audio chime playback blocked or unavailable:", err);
+  }
+}
+
 function AdminDashboard() {
   const navigate = useNavigate();
+  const { auth } = Route.useRouteContext();
+  const userRole = auth?.user?.role || "admin";
   const { theme, setTheme } = useTheme();
-  const [activeTab, setActiveTab] = useState("overview");
+  const [activeTab, setActiveTab] = useState(() => getDefaultTab(userRole));
+
+  // Enforce role-based tab restrictions
+  useEffect(() => {
+    if (!canAccessTab(userRole, activeTab)) {
+      setActiveTab(getDefaultTab(userRole));
+    }
+  }, [userRole, activeTab]);
   const [orders, setOrders] = useState([]);
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [users, setUsers] = useState([]);
   const [userRoleFilter, setUserRoleFilter] = useState("all");
   const [userSearch, setUserSearch] = useState("");
   const [updatingUserId, setUpdatingUserId] = useState(null);
+
+  // Notification & Sound State
+  const [notifications, setNotifications] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem("flamebox_notifications") || "[]");
+    } catch {
+      return [];
+    }
+  });
+  const [soundEnabled, setSoundEnabled] = useState(() => {
+    try {
+      return localStorage.getItem("flamebox_sound_enabled") !== "false";
+    } catch {
+      return true;
+    }
+  });
+  const [notifOpen, setNotifOpen] = useState(false);
+  const notifRef = useRef(null);
+  const soundEnabledRef = useRef(soundEnabled);
+  const processedOrderIdsRef = useRef(new Set());
+  const isInitialLoadDone = useRef(false);
+
+  useEffect(() => {
+    soundEnabledRef.current = soundEnabled;
+  }, [soundEnabled]);
+
+  // Click outside listener for notification dropdown
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (notifRef.current && !notifRef.current.contains(event.target)) {
+        setNotifOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Unlock browser audio restrictions on first user interaction
+  useEffect(() => {
+    const unlockAudio = () => {
+      try {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (AudioContextClass) {
+          const ctx = new AudioContextClass();
+          ctx.resume().then(() => ctx.close()).catch(() => {});
+        }
+      } catch {}
+      window.removeEventListener("click", unlockAudio);
+      window.removeEventListener("keydown", unlockAudio);
+    };
+    window.addEventListener("click", unlockAudio);
+    window.addEventListener("keydown", unlockAudio);
+    return () => {
+      window.removeEventListener("click", unlockAudio);
+      window.removeEventListener("keydown", unlockAudio);
+    };
+  }, []);
+
+  const toggleSound = () => {
+    const next = !soundEnabled;
+    setSoundEnabled(next);
+    soundEnabledRef.current = next;
+    try {
+      localStorage.setItem("flamebox_sound_enabled", String(next));
+    } catch {}
+    if (next) {
+      playOrderChime();
+      toast.info("Order notification sound enabled 🔔");
+    } else {
+      toast.info("Order notification sound muted 🔕");
+    }
+  };
+
+  const markAsRead = (notifId) => {
+    setNotifications((prev) => {
+      const updated = prev.map((n) => (n.id === notifId ? { ...n, read: true } : n));
+      try {
+        localStorage.setItem("flamebox_notifications", JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+  };
+
+  const markAllAsRead = () => {
+    setNotifications((prev) => {
+      const updated = prev.map((n) => ({ ...n, read: true }));
+      try {
+        localStorage.setItem("flamebox_notifications", JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+    toast.success("All notifications marked as read");
+  };
+
+  const clearAllNotifications = () => {
+    setNotifications([]);
+    try {
+      localStorage.removeItem("flamebox_notifications");
+    } catch {}
+    toast.info("Notifications cleared");
+  };
+
+  const handleIncomingOrder = (newRawOrder) => {
+    if (!newRawOrder || !newRawOrder.id) return;
+    if (processedOrderIdsRef.current.has(newRawOrder.id)) return;
+    processedOrderIdsRef.current.add(newRawOrder.id);
+
+    const normalized = {
+      ...newRawOrder,
+      paymentMethod: newRawOrder.payment_method || newRawOrder.paymentMethod || "card",
+      payment_method: newRawOrder.payment_method || newRawOrder.paymentMethod || "card",
+      createdAt: newRawOrder.created_at || newRawOrder.createdAt || new Date().toISOString(),
+      created_at: newRawOrder.created_at || newRawOrder.createdAt || new Date().toISOString(),
+      subtotal: Number(newRawOrder.subtotal || 0),
+      delivery: Number(newRawOrder.delivery || 0),
+      tax: Number(newRawOrder.tax || 0),
+      total: Number(newRawOrder.total || 0),
+      customer: typeof newRawOrder.customer === "string" ? JSON.parse(newRawOrder.customer) : (newRawOrder.customer || {}),
+      items: Array.isArray(newRawOrder.items) ? newRawOrder.items : (typeof newRawOrder.items === "string" ? JSON.parse(newRawOrder.items) : []),
+    };
+
+    // Prepend to existing orders state immediately
+    setOrders((prev) => [normalized, ...prev.filter((o) => o.id !== normalized.id)]);
+
+    // Only notify if this arrived in real-time after initial load
+    if (isInitialLoadDone.current) {
+      const customerName = normalized.customer?.name || "Valued Customer";
+      const newNotif = {
+        id: `notif-${normalized.id}-${Date.now()}`,
+        orderId: normalized.id,
+        customerName,
+        total: normalized.total,
+        time: new Date().toISOString(),
+        read: false,
+      };
+
+      setNotifications((prev) => {
+        const updated = [newNotif, ...prev.filter((n) => n.orderId !== normalized.id)];
+        try {
+          localStorage.setItem("flamebox_notifications", JSON.stringify(updated.slice(0, 50)));
+        } catch {}
+        return updated;
+      });
+
+      // Play audio chime if sound is enabled
+      if (soundEnabledRef.current) {
+        playOrderChime();
+      }
+
+      // Show real-time order toast
+      toast.success(`🔥 New Order #${normalized.id} Received!`, {
+        description: `${customerName} • $${normalized.total.toFixed(2)} (${normalized.items.length} items)`,
+        action: {
+          label: "View Order",
+          onClick: () => setActiveTab("orders"),
+        },
+        duration: 8000,
+      });
+    }
+  };
 
   const handleLogout = async () => {
     try {
@@ -186,6 +407,12 @@ function AdminDashboard() {
           customer: typeof o.customer === "string" ? JSON.parse(o.customer) : (o.customer || {}),
           items: Array.isArray(o.items) ? o.items : (typeof o.items === "string" ? JSON.parse(o.items) : []),
         }));
+
+        normalized.forEach((o) => {
+          if (o.id) processedOrderIdsRef.current.add(o.id);
+        });
+        isInitialLoadDone.current = true;
+
         setOrders(normalized);
         localStorage.setItem("flamebox_orders", JSON.stringify(normalized));
       }
@@ -194,46 +421,71 @@ function AdminDashboard() {
     }
   };
 
+  // Fetch users — only executed if user is an admin
+  const fetchUsers = async () => {
+    if (userRole !== "admin") return;
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session) return;
+
+      const resp = await fetch("/api/admin/users", {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      });
+      if (!resp.ok) return;
+      const { users } = await resp.json();
+      setUsers(users || []);
+    } catch (e) {
+      console.error("Failed to fetch users", e);
+    }
+  };
+
   useEffect(() => {
     fetchOrders();
-
-    const fetchUsers = async () => {
-      try {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-        if (!session) return;
-
-        const resp = await fetch("/api/admin/users", {
-          method: "GET",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${session.access_token}`,
-          },
-        });
-        if (!resp.ok) return;
-        const { users } = await resp.json();
-        setUsers(users || []);
-      } catch (e) {
-        console.error("Failed to fetch users", e);
-      }
-    };
-
     fetchUsers();
 
     // Subscribe to real-time changes in Supabase orders
     let orderChannel = null;
     if (supabase) {
       orderChannel = supabase
-        .channel("public:orders-admin")
+        .channel("public:orders-admin-realtime")
         .on(
           "postgres_changes",
-          { event: "*", schema: "public", table: "orders" },
-          () => {
-            fetchOrders();
+          { event: "INSERT", schema: "public", table: "orders" },
+          (payload) => {
+            if (payload.new) {
+              handleIncomingOrder(payload.new);
+            }
           }
         )
-        .subscribe();
+        .on(
+          "postgres_changes",
+          { event: "UPDATE", schema: "public", table: "orders" },
+          (payload) => {
+            if (payload.new) {
+              setOrders((prev) =>
+                prev.map((o) =>
+                  o.id === payload.new.id
+                    ? {
+                        ...o,
+                        ...payload.new,
+                        status: payload.new.status,
+                        paymentMethod: payload.new.payment_method || payload.new.paymentMethod || o.paymentMethod,
+                      }
+                    : o
+                )
+              );
+            }
+          }
+        )
+        .subscribe((status) => {
+          console.log("Supabase Realtime orders subscription status:", status);
+        });
     }
 
     const interval = setInterval(fetchOrders, 10000);
@@ -593,7 +845,7 @@ function AdminDashboard() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-background text-foreground">
-      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
+      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} userRole={userRole} />
       <main className="flex-1 overflow-auto p-4">
         {/* Top Header */}
         <header className="sticky top-0 z-30 bg-card border-b border-border shadow-sm">
@@ -608,7 +860,7 @@ function AdminDashboard() {
                 </span>
               </Link>
               <span className="rounded-md bg-brand/10 px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-brand">
-                Admin Portal
+                {userRole === "chef" ? "Chef Portal" : "Admin Portal"}
               </span>
             </div>
 
@@ -624,6 +876,166 @@ function AdminDashboard() {
               <Button asChild variant="outline" size="sm" className="rounded-full">
                 <Link to="/">View Storefront</Link>
               </Button>
+
+              {/* Notification Bell with Real-Time Unread Badge & Dropdown */}
+              <div className="relative" ref={notifRef}>
+                <button
+                  type="button"
+                  onClick={() => setNotifOpen((prev) => !prev)}
+                  className="relative grid h-9 w-9 place-items-center rounded-full bg-secondary border border-border transition hover:bg-muted focus:outline-none focus:ring-2 focus:ring-brand"
+                  aria-label="Notifications"
+                >
+                  {notifications.filter((n) => !n.read).length > 0 ? (
+                    <BellRing className="h-4.5 w-4.5 text-brand animate-bounce" />
+                  ) : (
+                    <Bell className="h-4.5 w-4.5 text-muted-foreground" />
+                  )}
+                  {notifications.filter((n) => !n.read).length > 0 && (
+                    <span className="absolute -top-1 -right-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-rose-600 px-1 text-[10px] font-bold text-white shadow-md ring-2 ring-background">
+                      {notifications.filter((n) => !n.read).length > 99
+                        ? "99+"
+                        : notifications.filter((n) => !n.read).length}
+                    </span>
+                  )}
+                </button>
+
+                {/* Dropdown Menu */}
+                {notifOpen && (
+                  <div className="absolute right-0 top-12 z-50 w-80 sm:w-96 rounded-2xl border border-border bg-card shadow-2xl p-4 animate-in fade-in-50 zoom-in-95 duration-200">
+                    <div className="flex items-center justify-between border-b border-border pb-3">
+                      <div className="flex items-center gap-2">
+                        <h4 className="font-display text-base font-bold">Notifications</h4>
+                        {notifications.filter((n) => !n.read).length > 0 && (
+                          <span className="rounded-full bg-brand/10 px-2 py-0.5 text-[11px] font-semibold text-brand">
+                            {notifications.filter((n) => !n.read).length} new
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={toggleSound}
+                          className={`grid h-7 w-7 place-items-center rounded-lg border transition ${
+                            soundEnabled
+                              ? "border-brand/30 bg-brand/10 text-brand"
+                              : "border-border bg-secondary text-muted-foreground"
+                          }`}
+                          title={soundEnabled ? "Mute notification sound" : "Enable notification sound"}
+                        >
+                          {soundEnabled ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5" />}
+                        </button>
+                        {notifications.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={markAllAsRead}
+                            className="flex items-center gap-1 rounded-lg border border-border bg-secondary/50 px-2 py-1 text-[11px] font-medium text-muted-foreground transition hover:text-foreground"
+                            title="Mark all as read"
+                          >
+                            <CheckCheck className="h-3.5 w-3.5" />
+                            <span className="hidden sm:inline">Mark all read</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Notifications List */}
+                    <div className="mt-3 max-h-80 overflow-y-auto space-y-2">
+                      {notifications.length === 0 ? (
+                        <div className="py-8 text-center text-xs text-muted-foreground">
+                          <Bell className="mx-auto h-8 w-8 text-muted-foreground/30 mb-2" />
+                          <p className="font-medium">No notifications yet</p>
+                          <p className="text-[11px] text-muted-foreground/70 mt-0.5">
+                            New orders will appear here automatically
+                          </p>
+                        </div>
+                      ) : (
+                        notifications.slice(0, 30).map((n) => (
+                          <div
+                            key={n.id}
+                            onClick={() => {
+                              markAsRead(n.id);
+                              setActiveTab("orders");
+                              setNotifOpen(false);
+                            }}
+                            className={`group flex items-start justify-between gap-3 rounded-xl p-3 text-xs transition cursor-pointer border ${
+                              !n.read
+                                ? "bg-brand/5 border-brand/25 hover:bg-brand/10"
+                                : "bg-secondary/30 border-transparent hover:bg-secondary/60 text-muted-foreground"
+                            }`}
+                          >
+                            <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                              <div
+                                className={`grid h-7 w-7 shrink-0 place-items-center rounded-lg ${
+                                  !n.read ? "bg-brand text-brand-foreground" : "bg-muted text-muted-foreground"
+                                }`}
+                              >
+                                <ShoppingBag className="h-3.5 w-3.5" />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-semibold text-foreground">
+                                    Order #{n.orderId}
+                                  </span>
+                                  {!n.read && (
+                                    <span className="h-1.5 w-1.5 rounded-full bg-brand animate-pulse" />
+                                  )}
+                                </div>
+                                <p className="truncate text-muted-foreground">
+                                  {n.customerName} • <strong className="text-foreground">${Number(n.total || 0).toFixed(2)}</strong>
+                                </p>
+                                <p className="text-[10px] text-muted-foreground/70 mt-0.5 flex items-center gap-1">
+                                  <Clock className="h-3 w-3" />
+                                  {new Date(n.time).toLocaleTimeString([], {
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                  })}
+                                </p>
+                              </div>
+                            </div>
+                            {!n.read && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  markAsRead(n.id);
+                                }}
+                                className="opacity-0 group-hover:opacity-100 p-1 rounded-md hover:bg-background transition text-muted-foreground hover:text-foreground"
+                                title="Mark as read"
+                              >
+                                <Check className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+
+                    {notifications.length > 0 && (
+                      <div className="mt-3 pt-2.5 border-t border-border flex items-center justify-between text-xs">
+                        <button
+                          type="button"
+                          onClick={clearAllNotifications}
+                          className="text-muted-foreground hover:text-destructive text-[11px] transition"
+                        >
+                          Clear all
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveTab("orders");
+                            setNotifOpen(false);
+                          }}
+                          className="text-brand font-semibold text-[11px] hover:underline flex items-center gap-1"
+                        >
+                          <span>View Live Orders</span>
+                          <ArrowRight className="h-3 w-3" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
               <button
                 onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
                 className="grid h-9 w-9 place-items-center rounded-full bg-secondary border border-border transition hover:bg-muted"
@@ -636,18 +1048,20 @@ function AdminDashboard() {
         </header>
 
         {/* TAB 1: OVERVIEW */}
-        {activeTab === "overview" && (
+        {activeTab === "overview" && canAccessTab(userRole, "overview") && (
           <OverviewTab
             totalRevenue={totalRevenue}
             orders={orders}
             activeCount={activeCount}
             settings={settings}
             menuItems={menuItems}
+            setActiveTab={setActiveTab}
+            getStatusBadge={getStatusBadge}
           />
         )}
 
         {/* TAB 2: LIVE ORDERS */}
-        {activeTab === "orders" && (
+        {activeTab === "orders" && canAccessTab(userRole, "orders") && (
           <LiveOrdersTab
             orders={orders}
             filteredOrders={filteredOrders}
@@ -667,7 +1081,7 @@ function AdminDashboard() {
         )}
 
         {/* TAB 3: MENU MANAGEMENT */}
-        {activeTab === "menu" && (
+        {activeTab === "menu" && canAccessTab(userRole, "menu") && (
           <MenuManagementTab
             filteredMenu={filteredMenu}
             selectedCategory={selectedCategory}
@@ -689,7 +1103,7 @@ function AdminDashboard() {
         )}
 
         {/* TAB 4: SETTINGS */}
-        {activeTab === "settings" && (
+        {activeTab === "settings" && canAccessTab(userRole, "settings") && (
           <div className="mt-6 max-w-2xl mx-auto rounded-3xl border border-border bg-card p-6 shadow-sm animate-in fade-in-50 duration-300">
             <h2 className="font-display text-2xl">Store & Kitchen Settings</h2>
             <p className="text-xs text-muted-foreground mb-6">
@@ -777,7 +1191,7 @@ function AdminDashboard() {
         )}
 
         {/* TAB 6: USERS & ROLES */}
-        {activeTab === "users" && (
+        {activeTab === "users" && canAccessTab(userRole, "users") && (
           <UsersRolesTab
             users={users}
             userRoleFilter={userRoleFilter}
@@ -786,7 +1200,7 @@ function AdminDashboard() {
             setUserSearch={setUserSearch}
             updatingUserId={updatingUserId}
             setUpdatingUserId={setUpdatingUserId}
-            handleUpdateUserRole={handleUpdateUserRole}
+            fetchUsers={fetchUsers}
             toast={toast}
           />
         )}

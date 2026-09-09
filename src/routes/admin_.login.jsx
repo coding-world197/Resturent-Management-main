@@ -11,13 +11,9 @@ export const Route = createFileRoute("/admin_/login")({
   beforeLoad: async ({ search }) => {
     const auth = await checkAdminAuth();
     if (auth.isAuthenticated) {
-      if (auth.user?.role === "admin") {
+      if (auth.user?.role === "admin" || auth.user?.role === "chef") {
         throw redirect({
           to: search?.redirect || "/admin",
-        });
-      } else if (auth.user?.role === "chef") {
-        throw redirect({
-          to: search?.redirect || "/chef",
         });
       }
     }
@@ -58,8 +54,7 @@ function AdminLoginPage() {
 
       if (res.success) {
         toast.success("Welcome back! Redirecting...");
-        const targetRoute = res.role === "chef" ? "/chef" : "/admin";
-        window.location.href = search?.redirect || targetRoute;
+        window.location.href = search?.redirect || "/admin";
       } else {
         setErrorMessage(res.error || "Invalid username or password.");
         toast.error(res.error || "Login failed");

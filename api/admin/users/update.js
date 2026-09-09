@@ -1,4 +1,4 @@
-import { supabase } from '../../src/lib/supabaseServer.js';
+import { supabase } from '../../../src/lib/supabaseServer.js';
 
 function parseJson(req) {
   let raw = '';

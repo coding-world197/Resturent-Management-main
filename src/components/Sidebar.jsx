@@ -9,25 +9,30 @@ import {
   Flame,
 } from 'lucide-react';
 import { Link } from '@tanstack/react-router';
+import { getTabsForRole } from '@/lib/permissions';
+
+// Icon lookup — maps the string icon names in permissions.js to real components
+const ICON_MAP = {
+  TrendingUp,
+  ShoppingBag,
+  ChefHat,
+  Users,
+  Settings,
+};
 
 /**
  * Sidebar component for the Admin Dashboard.
- * Displays navigation tabs (Overview, Live Orders, Menu & Dishes, Users & Roles, Store Settings)
+ * Displays navigation tabs filtered by the current user's role,
  * and a logout button at the bottom.
  *
  * Props:
  *   activeTab: string – current active tab identifier
  *   setActiveTab: (tab: string) => void – function to change active tab
+ *   userRole: string – current user role ("admin" | "chef")
  *   onClose: () => void – optional handler for closing the drawer on mobile
  */
-export default function Sidebar({ activeTab, setActiveTab, onClose }) {
-  const tabs = [
-    { id: 'overview', label: 'Overview', icon: TrendingUp },
-    { id: 'orders', label: 'Live Orders', icon: ShoppingBag },
-    { id: 'menu', label: 'Menu & Dishes', icon: ChefHat },
-    { id: 'users', label: 'Users & Roles', icon: Users },
-    { id: 'settings', label: 'Store Settings', icon: Settings },
-  ];
+export default function Sidebar({ activeTab, setActiveTab, userRole, onClose }) {
+  const visibleTabs = getTabsForRole(userRole || 'admin');
 
   return (
     <aside
@@ -38,32 +43,24 @@ export default function Sidebar({ activeTab, setActiveTab, onClose }) {
         {/* Brand logo */}
         <Link to="/" className="mb-8 flex items-center gap-2">
           <span className="grid h-9 w-9 place-items-center rounded-xl bg-brand text-brand-foreground shadow-md transition-transform hover:scale-105">
-            <span className="grid h-9 w-9 place-items-center rounded-xl bg-brand text-brand-foreground shadow-md transition-transform group-hover:scale-105">
-              <Flame className="h-5 w-5" />
-            </span>
-            {/* You can replace with a logo component */}
-
-            {/* <svg
-              className="h-5 w-5"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M12 2l9 21H3L12 2z" />
-            </svg> */}
+            <Flame className="h-5 w-5" />
           </span>
           <span className="font-display text-xl tracking-wide text-foreground">
             FLAME<span className="text-brand">BOX</span>
           </span>
         </Link>
 
-        {/* Navigation links */}
-        <nav className="flex flex-col gap-1 mt-8">
-          {tabs.map((tab) => {
-            const Icon = tab.icon;
+        {/* Role indicator */}
+        {userRole && (
+          <div className="mb-4 rounded-full bg-secondary px-3 py-1.5 text-center text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            {userRole === 'admin' ? '👑 Admin Portal' : '👨‍🍳 Chef Portal'}
+          </div>
+        )}
+
+        {/* Navigation links — filtered by role permissions */}
+        <nav className="flex flex-col gap-1 mt-2">
+          {visibleTabs.map((tab) => {
+            const Icon = ICON_MAP[tab.icon] || TrendingUp;
             const active = activeTab === tab.id;
             return (
               <button
