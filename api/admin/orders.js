@@ -38,20 +38,46 @@ export default async function handler(req, res) {
       return res.status(403).json({ error: 'Forbidden: Admin or Chef role required' });
     }
 
+    if (!supabase) {
+      console.error('Supabase server client not initialized. Check environment variables.');
+      return res.status(500).json({ error: 'Database client not initialized' });
+    }
+
     // Fetch all orders
-    const { data: orders, error: ordersError } = await supabase
+    let { data: orders, error: ordersError } = await supabase
       .from('orders')
       .select('*')
-      .order('createdAt', { ascending: false });
+      .order('created_at', { ascending: false });
+
+    // Fallback if created_at column fails for any reason
+    if (ordersError && ordersError.message?.includes('created_at')) {
+      const fallback = await supabase.from('orders').select('*');
+      orders = fallback.data;
+      ordersError = fallback.error;
+    }
 
     if (ordersError) {
       console.error('Failed to fetch orders:', ordersError);
-      return res.status(500).json({ error: 'Failed to fetch orders' });
+      return res.status(500).json({ error: 'Failed to fetch orders', details: ordersError.message });
     }
 
-    return res.status(200).json({ orders });
+    const normalizedOrders = (orders || []).map((o) => ({
+      ...o,
+      paymentMethod: o.payment_method || o.paymentMethod || 'card',
+      payment_method: o.payment_method || o.paymentMethod || 'card',
+      createdAt: o.created_at || o.createdAt || new Date().toISOString(),
+      created_at: o.created_at || o.createdAt || new Date().toISOString(),
+      subtotal: Number(o.subtotal || 0),
+      delivery: Number(o.delivery || 0),
+      tax: Number(o.tax || 0),
+      total: Number(o.total || 0),
+      customer: typeof o.customer === 'string' ? JSON.parse(o.customer) : (o.customer || {}),
+      items: Array.isArray(o.items) ? o.items : (typeof o.items === 'string' ? JSON.parse(o.items) : []),
+    }));
+
+    return res.status(200).json({ orders: normalizedOrders });
   } catch (error) {
     console.error('Orders API error:', error);
-    return res.status(500).json({ error: 'Internal Server Error' });
+    return res.status(500).json({ error: 'Internal Server Error', message: error.message });
   }
 }

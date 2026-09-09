@@ -61,12 +61,14 @@ function ChefDashboard() {
     }
   };
 
-  useEffect(() => {
-    const fetchOrders = async () => {
+  const fetchOrders = async () => {
+    try {
+      let fetchedOrders = null;
+
       try {
         const { data: { session } } = await supabase.auth.getSession();
         const headers = { 'Content-Type': 'application/json' };
-        if (session) {
+        if (session?.access_token) {
           headers['Authorization'] = `Bearer ${session.access_token}`;
         }
         
@@ -75,27 +77,104 @@ function ChefDashboard() {
           headers,
           credentials: 'omit',
         });
-        if (!resp.ok) return;
-        const { orders } = await resp.json();
-        setOrders(orders);
-      } catch (e) {
-        console.error('Network error while fetching orders:', e);
+        if (resp.ok) {
+          const data = await resp.json();
+          if (Array.isArray(data.orders)) {
+            fetchedOrders = data.orders;
+          }
+        }
+      } catch (apiErr) {
+        console.warn("Chef API fetch warning:", apiErr);
+      }
+
+      if (!fetchedOrders && supabase) {
+        const { data, error } = await supabase
+          .from("orders")
+          .select("*")
+          .order("created_at", { ascending: false });
+
+        if (!error && Array.isArray(data)) {
+          fetchedOrders = data;
+        }
+      }
+
+      if (fetchedOrders) {
+        const normalized = fetchedOrders.map((o) => ({
+          ...o,
+          paymentMethod: o.payment_method || o.paymentMethod || "card",
+          payment_method: o.payment_method || o.paymentMethod || "card",
+          createdAt: o.created_at || o.createdAt || new Date().toISOString(),
+          created_at: o.created_at || o.createdAt || new Date().toISOString(),
+          subtotal: Number(o.subtotal || 0),
+          delivery: Number(o.delivery || 0),
+          tax: Number(o.tax || 0),
+          total: Number(o.total || 0),
+          customer: typeof o.customer === "string" ? JSON.parse(o.customer) : (o.customer || {}),
+          items: Array.isArray(o.items) ? o.items : (typeof o.items === "string" ? JSON.parse(o.items) : []),
+        }));
+        setOrders(normalized);
+      }
+    } catch (e) {
+      console.error('Network error while fetching orders:', e);
+    }
+  };
+
+  useEffect(() => {
+    fetchOrders();
+
+    let orderChannel = null;
+    if (supabase) {
+      orderChannel = supabase
+        .channel("public:orders-chef")
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "orders" },
+          () => {
+            fetchOrders();
+          }
+        )
+        .subscribe();
+    }
+
+    const interval = setInterval(fetchOrders, 10000);
+    return () => {
+      clearInterval(interval);
+      if (orderChannel && supabase) {
+        try {
+          supabase.removeChannel(orderChannel);
+        } catch {}
       }
     };
-    fetchOrders();
-    const interval = setInterval(fetchOrders, 15000);
-    return () => clearInterval(interval);
   }, []);
 
-  const handleUpdateOrderStatus = (orderId, nextStatus) => {
+  const handleUpdateOrderStatus = async (orderId, nextStatus) => {
     // Optimistic update
     const updated = orders.map((o) => (o.id === orderId ? { ...o, status: nextStatus } : o));
     setOrders(updated);
     if (selectedOrder && selectedOrder.id === orderId) {
       setSelectedOrder({ ...selectedOrder, status: nextStatus });
     }
-    toast.success(`Order ${orderId} updated to "${nextStatus}"`);
-    // Ideally update in Supabase here
+
+    try {
+      if (supabase) {
+        const { error } = await supabase
+          .from("orders")
+          .update({ status: nextStatus })
+          .eq("id", orderId);
+
+        if (error) {
+          console.error("Failed to update status in Supabase:", error);
+          toast.error(`Database error: ${error.message}`);
+          fetchOrders();
+          return;
+        }
+      }
+      toast.success(`Order ${orderId} updated to "${nextStatus}"`);
+    } catch (err) {
+      console.error("Failed to update order status:", err);
+      toast.error("Failed to update order status in database");
+      fetchOrders();
+    }
   };
 
   const pendingCount = orders.filter((o) => o.status === "Pending").length;

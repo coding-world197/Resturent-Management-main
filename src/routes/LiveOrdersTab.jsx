@@ -17,7 +17,19 @@ export default function LiveOrdersTab({
   saveOrders,
   toast,
   getStatusBadge,
+  fetchOrders,
 }) {
+  const [refreshing, setRefreshing] = React.useState(false);
+
+  const onRefresh = async () => {
+    if (fetchOrders) {
+      setRefreshing(true);
+      await fetchOrders();
+      setRefreshing(false);
+      toast.success("Orders refreshed from database");
+    }
+  };
+
   return (
     <div className="mt-6 space-y-6 animate-in fade-in-50 duration-300">
       {/* Filter Bar */}
@@ -37,38 +49,18 @@ export default function LiveOrdersTab({
           ))}
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            className="rounded-full text-xs gap-1.5"
-            onClick={() => {
-              const sample = {
-                id: `ORD-${Math.floor(1000 + Math.random() * 9000)}`,
-                customer: {
-                  name: "Test Customer " + Math.floor(Math.random() * 100),
-                  email: "guest@example.com",
-                  phone: "+1 555-0199",
-                  address: "42 Wallaby Way, Sydney",
-                  notes: "Fresh demo order created from admin panel",
-                },
-                items: [
-                  { id: "1", name: "Classic Cheeseburger", price: 8.99, qty: 1 },
-                  { id: "4", name: "Golden Fries", price: 3.99, qty: 1 },
-                ],
-                paymentMethod: "card",
-                subtotal: 12.98,
-                delivery: 2.99,
-                tax: 1.04,
-                total: 17.01,
-                status: "Pending",
-                createdAt: new Date().toISOString(),
-              };
-              saveOrders([sample, ...orders]);
-              toast.success("Created new mock test order!");
-            }}
-          >
-            <Plus className="h-3.5 w-3.5" /> Simulate Order
-          </Button>
+          {fetchOrders && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="rounded-full text-xs gap-1.5"
+              onClick={onRefresh}
+              disabled={refreshing}
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
+          )}
         </div>
       </div>
 
@@ -81,56 +73,67 @@ export default function LiveOrdersTab({
             <p className="text-sm mt-1">No orders matching the status filter "{orderFilter}".</p>
           </div>
         ) : (
-          filteredOrders.map((order) => (
-            <div
-              key={order.id}
-              className="flex flex-col justify-between rounded-3xl glass-panel p-5 shadow-sm hover:border-brand/40 transition"
-            >
-              <div>
-                <div className="flex items-center justify-between border-b border-border/60 pb-3">
-                  <div>
-                    <span className="font-display text-lg font-bold">{order.id}</span>
-                    <p className="text-xs text-muted-foreground">
-                      {new Date(order.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                    </p>
-                  </div>
-                  {getStatusBadge(order.status)}
-                </div>
+          filteredOrders.map((order) => {
+            const customer = typeof order.customer === "string" ? JSON.parse(order.customer) : (order.customer || {});
+            const items = Array.isArray(order.items) ? order.items : (typeof order.items === "string" ? JSON.parse(order.items) : []);
+            const orderDate = order.createdAt || order.created_at;
+            const payMethod = (order.paymentMethod || order.payment_method || "card").toUpperCase();
+            const orderTotal = Number(order.total || 0).toFixed(2);
 
-                {/* Customer Info */}
-                <div className="my-3 space-y-1 text-xs">
-                  <p className="font-semibold text-foreground">{order.customer.name}</p>
-                  <p className="text-muted-foreground flex items-center gap-1 truncate">
-                    <Phone className="h-3 w-3 shrink-0" /> {order.customer.phone}
-                  </p>
-                  <p className="text-muted-foreground flex items-start gap-1">
-                    <MapPin className="h-3 w-3 shrink-0 mt-0.5" />
-                    <span className="line-clamp-2">{order.customer.address}</span>
-                  </p>
-                </div>
-
-                {/* Ordered Items */}
-                <div className="rounded-2xl bg-secondary/40 p-3 text-xs space-y-1.5 my-3">
-                  {order.items.map((item, idx) => (
-                    <div key={idx} className="flex justify-between items-center">
-                      <span>
-                        <strong className="text-brand">{item.qty}x</strong> {item.name}
-                      </span>
-                      <span className="text-muted-foreground">${(item.price * item.qty).toFixed(2)}</span>
+            return (
+              <div
+                key={order.id}
+                className="flex flex-col justify-between rounded-3xl glass-panel p-5 shadow-sm hover:border-brand/40 transition"
+              >
+                <div>
+                  <div className="flex items-center justify-between border-b border-border/60 pb-3">
+                    <div>
+                      <span className="font-display text-lg font-bold">{order.id}</span>
+                      <p className="text-xs text-muted-foreground">
+                        {orderDate ? new Date(orderDate).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "Recent"}
+                      </p>
                     </div>
-                  ))}
-                  <div className="border-t border-border pt-1.5 flex justify-between font-bold text-sm">
-                    <span>Total ({order.paymentMethod.toUpperCase()})</span>
-                    <span className="text-brand font-display text-base">${order.total.toFixed(2)}</span>
+                    {getStatusBadge(order.status)}
                   </div>
-                </div>
 
-                {order.customer.notes && (
-                  <p className="text-xs italic text-muted-foreground bg-amber-5/5 p-2 rounded-xl border border-amber-500/20 mb-3">
-                    📝 Note: {order.customer.notes}
-                  </p>
-                )}
-              </div>
+                  {/* Customer Info */}
+                  <div className="my-3 space-y-1 text-xs">
+                    <p className="font-semibold text-foreground">{customer.name || "Guest Customer"}</p>
+                    {customer.phone && (
+                      <p className="text-muted-foreground flex items-center gap-1 truncate">
+                        <Phone className="h-3 w-3 shrink-0" /> {customer.phone}
+                      </p>
+                    )}
+                    {customer.address && (
+                      <p className="text-muted-foreground flex items-start gap-1">
+                        <MapPin className="h-3 w-3 shrink-0 mt-0.5" />
+                        <span className="line-clamp-2">{customer.address}</span>
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Ordered Items */}
+                  <div className="rounded-2xl bg-secondary/40 p-3 text-xs space-y-1.5 my-3">
+                    {items.map((item, idx) => (
+                      <div key={idx} className="flex justify-between items-center">
+                        <span>
+                          <strong className="text-brand">{item.qty}x</strong> {item.name}
+                        </span>
+                        <span className="text-muted-foreground">${(Number(item.price || 0) * Number(item.qty || 1)).toFixed(2)}</span>
+                      </div>
+                    ))}
+                    <div className="border-t border-border pt-1.5 flex justify-between font-bold text-sm">
+                      <span>Total ({payMethod})</span>
+                      <span className="text-brand font-display text-base">${orderTotal}</span>
+                    </div>
+                  </div>
+
+                  {customer.notes && (
+                    <p className="text-xs italic text-muted-foreground bg-amber-5/5 p-2 rounded-xl border border-amber-500/20 mb-3">
+                      📝 Note: {customer.notes}
+                    </p>
+                  )}
+                </div>
 
               {/* Quick Status Action Buttons */}
               <div className="pt-2 border-t border-border/60">
@@ -212,8 +215,9 @@ export default function LiveOrdersTab({
                 </Button>
               </div>
             </div>
-          ))
-        )}
+          );
+        })
+      )}
       </div>
     </div>
   );

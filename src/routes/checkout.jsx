@@ -51,6 +51,10 @@ function CheckoutPage() {
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const onSubmit = async (e) => {
     e.preventDefault();
+    if (lines.length === 0) {
+      toast.error("Your cart is empty");
+      return;
+    }
     if (!form.name || !form.email || !form.phone || !form.address || !form.city || !form.zip) {
       toast.error("Please fill in all delivery details");
       return;
@@ -59,41 +63,59 @@ function CheckoutPage() {
       toast.error("Please fill in your card details");
       return;
     }
+
+    const orderId = `ORD-${Date.now().toString().slice(-6)}`;
     const newOrder = {
-      id: `ORD-${Date.now().toString().slice(-4)}`,
+      id: orderId,
       customer: {
-        name: form.name,
-        email: form.email,
-        phone: form.phone,
-        address: `${form.address}, ${form.city} ${form.zip}`,
-        notes: form.notes || "",
+        name: form.name.trim(),
+        email: form.email.trim(),
+        phone: form.phone.trim(),
+        address: `${form.address.trim()}, ${form.city.trim()} ${form.zip.trim()}`,
+        notes: form.notes?.trim() || "",
       },
       items: lines.map((l) => ({
-        id: l.item.id,
+        id: String(l.item.id),
         name: l.item.name,
-        price: l.item.price,
-        qty: l.qty,
+        price: Number(l.item.price),
+        qty: Number(l.qty),
+        image: l.item.image || "",
       })),
-      paymentMethod: payment,
-      subtotal,
-      delivery,
-      tax,
-      total,
+      payment_method: payment,
+      subtotal: Number(subtotal.toFixed(2)),
+      delivery: Number(delivery.toFixed(2)),
+      tax: Number(tax.toFixed(2)),
+      total: Number(total.toFixed(2)),
       status: "Pending",
-      createdAt: new Date().toISOString(),
+      created_at: new Date().toISOString(),
     };
+
     try {
-      const existing = JSON.parse(localStorage.getItem("flamebox_orders") || "[]");
-      localStorage.setItem("flamebox_orders", JSON.stringify([newOrder, ...existing]));
-      const { error } = await supabase.from('orders').insert(newOrder);
-      if (error) throw error;
+      if (!supabase) {
+        throw new Error("Supabase is not configured. Please check your environment variables.");
+      }
+
+      const { error } = await supabase.from("orders").insert(newOrder);
+      if (error) {
+        console.error("Supabase insert error:", error);
+        throw error;
+      }
+
+      // Keep client-side cache updated after successful Supabase save
+      try {
+        const existing = JSON.parse(localStorage.getItem("flamebox_orders") || "[]");
+        localStorage.setItem("flamebox_orders", JSON.stringify([newOrder, ...existing]));
+      } catch (cacheErr) {
+        console.warn("Client localStorage cache error:", cacheErr);
+      }
+
+      setPlaced(true);
+      clear();
+      toast.success("Order placed! Your food is on its way 🔥");
     } catch (err) {
-      console.error(err);
-      toast.error("Failed to place order");
+      console.error("Failed to place order:", err);
+      toast.error(err.message || "Failed to place order. Please try again.");
     }
-    setPlaced(true);
-    clear();
-    toast.success("Order placed! Your food is on its way 🔥");
   };
   if (placed) {
     return (

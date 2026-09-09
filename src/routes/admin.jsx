@@ -66,100 +66,12 @@ export const Route = createFileRoute("/admin")({
   component: AdminDashboard,
 });
 
-const DEFAULT_ORDERS = [
-  {
-    id: "ORD-9024",
-    customer: {
-      name: "Aarav Sharma",
-      email: "aarav@example.com",
-      phone: "+1 (555) 234-5678",
-      address: "742 Evergreen Terrace, Springfield 97477",
-      notes: "Please deliver to the 3rd floor, ring bell twice.",
-    },
-    items: [
-      { id: "1", name: "Classic Cheeseburger", price: 8.99, qty: 2 },
-      { id: "4", name: "Golden Fries", price: 3.99, qty: 1 },
-      { id: "7", name: "Iced Cola", price: 2.5, qty: 2 },
-    ],
-    paymentMethod: "card",
-    subtotal: 26.97,
-    delivery: 2.99,
-    tax: 2.16,
-    total: 32.12,
-    status: "Pending",
-    createdAt: new Date(Date.now() - 1000 * 60 * 8).toISOString(),
-  },
-  {
-    id: "ORD-9023",
-    customer: {
-      name: "Sophia Chen",
-      email: "sophia.c@example.com",
-      phone: "+1 (555) 876-5432",
-      address: "120 Broadway Ave, Apt 4B, Metropolis 10001",
-      notes: "Extra napkins please!",
-    },
-    items: [
-      { id: "3", name: "Pepperoni Pizza", price: 14.0, qty: 1 },
-      { id: "6", name: "Buffalo Wings", price: 9.99, qty: 1 },
-      { id: "8", name: "Molten Lava Cake", price: 5.99, qty: 1 },
-    ],
-    paymentMethod: "card",
-    subtotal: 29.98,
-    delivery: 2.99,
-    tax: 2.4,
-    total: 35.37,
-    status: "Preparing",
-    createdAt: new Date(Date.now() - 1000 * 60 * 22).toISOString(),
-  },
-  {
-    id: "ORD-9022",
-    customer: {
-      name: "Marcus Vance",
-      email: "marcus.v@example.com",
-      phone: "+1 (555) 432-1098",
-      address: "88 Pine Street, Suite 12, Seattle 98101",
-      notes: "Call upon arrival.",
-    },
-    items: [
-      { id: "2", name: "Double Bacon Stack", price: 12.5, qty: 2 },
-      { id: "5", name: "Loaded Nachos", price: 7.5, qty: 1 },
-    ],
-    paymentMethod: "cash",
-    subtotal: 32.5,
-    delivery: 2.99,
-    tax: 2.6,
-    total: 38.09,
-    status: "Out for Delivery",
-    createdAt: new Date(Date.now() - 1000 * 60 * 45).toISOString(),
-  },
-  {
-    id: "ORD-9021",
-    customer: {
-      name: "Elena Rostova",
-      email: "elena.r@example.com",
-      phone: "+1 (555) 654-9870",
-      address: "450 Ocean Drive, Miami 33139",
-      notes: "Leave by door.",
-    },
-    items: [
-      { id: "1", name: "Classic Cheeseburger", price: 8.99, qty: 1 },
-      { id: "8", name: "Molten Lava Cake", price: 5.99, qty: 2 },
-    ],
-    paymentMethod: "card",
-    subtotal: 20.97,
-    delivery: 2.99,
-    tax: 1.68,
-    total: 25.64,
-    status: "Delivered",
-    createdAt: new Date(Date.now() - 1000 * 60 * 95).toISOString(),
-  },
-];
-
 function AdminDashboard() {
   const navigate = useNavigate();
   const { theme, setTheme } = useTheme();
   const [activeTab, setActiveTab] = useState("overview");
   const [orders, setOrders] = useState([]);
+  const [selectedOrder, setSelectedOrder] = useState(null);
   const [users, setUsers] = useState([]);
   const [userRoleFilter, setUserRoleFilter] = useState("all");
   const [userSearch, setUserSearch] = useState("");
@@ -217,34 +129,74 @@ function AdminDashboard() {
     return () => window.removeEventListener("admin-logout", handleSidebarLogout);
   }, []);
 
-  useEffect(() => {
-    const fetchOrders = async () => {
+  const fetchOrders = async () => {
+    try {
+      let fetchedOrders = null;
+
+      // 1. Try backend API first
       try {
         const {
           data: { session },
         } = await supabase.auth.getSession();
         const headers = { "Content-Type": "application/json" };
-        if (session) {
+        if (session?.access_token) {
           headers["Authorization"] = `Bearer ${session.access_token}`;
         }
 
         const resp = await fetch("/api/admin/orders", {
           method: "GET",
           headers,
-          credentials: "omit", // No longer using cookies for auth, using Bearer token
+          credentials: "omit",
         });
-        if (!resp.ok) {
-          console.error("Failed to fetch orders, status:", resp.status);
-          setOrders(DEFAULT_ORDERS);
-          return;
+        if (resp.ok) {
+          const data = await resp.json();
+          if (Array.isArray(data.orders)) {
+            fetchedOrders = data.orders;
+          }
         }
-        const { orders } = await resp.json();
-        setOrders(orders);
-      } catch (e) {
-        console.error("Network error while fetching orders:", e);
-        setOrders(DEFAULT_ORDERS);
+      } catch (apiErr) {
+        console.warn("API orders fetch warning, falling back to direct Supabase query:", apiErr);
       }
-    };
+
+      // 2. Direct Supabase query as robust fallback / direct source
+      if (!fetchedOrders && supabase) {
+        const { data, error } = await supabase
+          .from("orders")
+          .select("*")
+          .order("created_at", { ascending: false });
+
+        if (!error && Array.isArray(data)) {
+          fetchedOrders = data;
+        } else if (error) {
+          console.error("Direct Supabase orders fetch error:", error);
+        }
+      }
+
+      if (fetchedOrders) {
+        const normalized = fetchedOrders.map((o) => ({
+          ...o,
+          paymentMethod: o.payment_method || o.paymentMethod || "card",
+          payment_method: o.payment_method || o.paymentMethod || "card",
+          createdAt: o.created_at || o.createdAt || new Date().toISOString(),
+          created_at: o.created_at || o.createdAt || new Date().toISOString(),
+          subtotal: Number(o.subtotal || 0),
+          delivery: Number(o.delivery || 0),
+          tax: Number(o.tax || 0),
+          total: Number(o.total || 0),
+          customer: typeof o.customer === "string" ? JSON.parse(o.customer) : (o.customer || {}),
+          items: Array.isArray(o.items) ? o.items : (typeof o.items === "string" ? JSON.parse(o.items) : []),
+        }));
+        setOrders(normalized);
+        localStorage.setItem("flamebox_orders", JSON.stringify(normalized));
+      }
+    } catch (e) {
+      console.error("Error fetching orders:", e);
+    }
+  };
+
+  useEffect(() => {
+    fetchOrders();
+
     const fetchUsers = async () => {
       try {
         const {
@@ -267,10 +219,32 @@ function AdminDashboard() {
       }
     };
 
-    fetchOrders();
     fetchUsers();
-    const interval = setInterval(fetchOrders, 15000);
-    return () => clearInterval(interval);
+
+    // Subscribe to real-time changes in Supabase orders
+    let orderChannel = null;
+    if (supabase) {
+      orderChannel = supabase
+        .channel("public:orders-admin")
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "orders" },
+          () => {
+            fetchOrders();
+          }
+        )
+        .subscribe();
+    }
+
+    const interval = setInterval(fetchOrders, 10000);
+    return () => {
+      clearInterval(interval);
+      if (orderChannel && supabase) {
+        try {
+          supabase.removeChannel(orderChannel);
+        } catch {}
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -358,9 +332,10 @@ function AdminDashboard() {
     setTimeout(() => setCopiedSlipId(null), 3000);
   };
 
-  // Status Change handler
-  const handleUpdateOrderStatus = (orderId, nextStatus) => {
+  // Status Change handler - persists directly to Supabase and updates UI
+  const handleUpdateOrderStatus = async (orderId, nextStatus) => {
     const updated = orders.map((o) => (o.id === orderId ? { ...o, status: nextStatus } : o));
+    setOrders(updated);
     saveOrders(updated);
     if (selectedOrder && selectedOrder.id === orderId) {
       setSelectedOrder({ ...selectedOrder, status: nextStatus });
@@ -368,7 +343,27 @@ function AdminDashboard() {
     if (printingOrder && printingOrder.id === orderId) {
       setPrintingOrder({ ...printingOrder, status: nextStatus });
     }
-    toast.success(`Order ${orderId} updated to "${nextStatus}"`);
+
+    try {
+      if (supabase) {
+        const { error } = await supabase
+          .from("orders")
+          .update({ status: nextStatus })
+          .eq("id", orderId);
+
+        if (error) {
+          console.error("Failed to update status in Supabase:", error);
+          toast.error(`Database error: ${error.message}`);
+          fetchOrders();
+          return;
+        }
+      }
+      toast.success(`Order ${orderId} updated to "${nextStatus}"`);
+    } catch (err) {
+      console.error("Error updating order status:", err);
+      toast.error("Error updating order status in database");
+      fetchOrders();
+    }
   };
 
   const availableCategories = useMemo(() => {
@@ -647,6 +642,7 @@ function AdminDashboard() {
             orders={orders}
             activeCount={activeCount}
             settings={settings}
+            menuItems={menuItems}
           />
         )}
 
@@ -666,6 +662,7 @@ function AdminDashboard() {
             saveOrders={saveOrders}
             toast={toast}
             getStatusBadge={getStatusBadge}
+            fetchOrders={fetchOrders}
           />
         )}
 
